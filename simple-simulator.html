@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <!-- 引入 ECharts 文件 -->
+    <script src="echarts.min.js"></script>
+  </head>
+  <body>
+    <!-- 为ECharts准备一个具备大小（宽高）的Dom -->
+    <div id="main" style="width: 100%; height: 900px"></div>
+    <script type="text/javascript">
+      // 病床数
+      const BED_NUM = 60000000000
+
+      // 无症状感染者传染性相对有症状感染者
+      // 假设无症状感染者传播性为正常感染者的50%
+      const NON_SICK_INFECT_RATE = 0.2
+      // 经过疫苗优化之后无症状感染者为传染性正常人比率
+      const ADJUST_NON_SICK_INFECT_RATE = 0.2
+      // 天然无症状感染者比例60%
+      var NON_SICK_RATE = 0.6
+      // 经疫苗优化之后的无症状感染者比例
+      NON_SICK_RATE = 0.8
+      // 天然R值(如果不做强制控制的话)
+      const NATURE_R = 8
+      const ROUND1_R =
+        NATURE_R / (1 - NON_SICK_RATE + NON_SICK_RATE * NON_SICK_INFECT_RATE)
+      const R = ROUND1_R
+      // 每天采样数
+      // 以每天的9, 14, 19整点进行采样, 睡觉时间认为对防疫结果无影响
+      const SAMPLE_PER_DAY = 3
+      // 疫苗接种率
+      const VACCINATED_R = 0.65
+      // 病毒防感染能力
+      const ACCINATED_EFF_R = 0.6
+      // 住院天数
+      const SERIOUS_DAY = 5
+      // 病症病人平均治疗时间(时间段)
+      const SER_PER = SERIOUS_DAY * SAMPLE_PER_DAY
+      // 住院比例(需住院的比率)
+      const SERIOUS_RATE = 0.1
+      // 初始人口
+      const TOTAL_NUM = 15000000
+      // 潜伏期天
+      const INCUBATION_DAY = 5
+      // 发病期天
+      const SICK_DAY = 10
+      // 可传染区间
+      const INFECTION_TIME = SAMPLE_PER_DAY * (INCUBATION_DAY + SICK_DAY)
+      // 最高跟踪天数, 方便观看前期的曲线
+      const MAX_DAY = 3000
+      // 社区封锁带来感染概率降低效果, 0 为最好, 1为无效
+      const LOCK_EFFECT = 1
+      const LOCK_START_NUMBER = TOTAL_NUM
+      const LOCK_DAY = 2 * SAMPLE_PER_DAY
+      // 症状后第几天在家隔离, 也就是有症状后还在外面晃悠(ISOLATED_DAY-1)天
+      const ISOLATED_DAY = 1
+      // 隔离百分比
+      const ISOLATED_RATE = 1
+
+      // 平均潜伏期5天, 平均再10天后症状消失(暂且认为之后无传染性, 因为隔离政策也保证了他的无传染性)
+      // 记录每天病床每天病床病人的数量
+      var seriousPatient = []
+      // 每个时间段的有症状感染者
+      var patient = []
+
+      // 有症状感染者当前所处潜伏期间(比如外来输入在潜伏期)
+      const FIRST_INCUBATION_DAY = 2
+      // 初始潜伏期有症状感染者
+      const FIRST_PATIENT_NUMBER = 2
+      for (
+        var index = 0;
+        index < FIRST_INCUBATION_DAY * SAMPLE_PER_DAY - 1;
+        index++
+      ) {
+        patient.push(0)
+      }
+      // 种子病人
+      patient.push(FIRST_PATIENT_NUMBER)
+      // 有症状未隔离传染期
+      const SICK_FOUND_TIME = (ISOLATED_DAY - 1) * SAMPLE_PER_DAY
+      // 居家隔离者
+      var homePatient = []
+      // 每个时间段的无症状感染者
+      var infectNoPatient = []
+
+      // 总有症状感染者
+      var totalSickPatient = FIRST_PATIENT_NUMBER
+
+      // 总感染人数
+      var totalIll = FIRST_PATIENT_NUMBER
+
+      // 开始的时候免疫人数 = 天然免疫人数 + 接种疫苗比率 * 疫苗有效性 * 总人口
+      // 当被感染后也等于免疫
+      var immune = TOTAL_NUM * VACCINATED_R * ACCINATED_EFF_R
+
+      const MATRIX_NUMBER = 3
+      // 记录图表的数据
+      var dataMatrix = []
+      for (var index = 0; index < MATRIX_NUMBER * 2; index++) {
+        dataMatrix.push([])
+      }
+
+      // 第几次采样(从0开始计数)
+      var time = 0
+
+      // 每个时间点当前住院总人数
+      var currentTotalSeriousPatientNumber = 0
+      // 住院总人数
+      var totalSeriousPatientNumber = 0
+      var previousPatientNumber = 0
+
+      var currentLockDay = 0
+      // 医疗系统没有崩溃, 或者感染人数没有到总人数, 一直循环
+      while (
+        currentTotalSeriousPatientNumber < BED_NUM &&
+        totalIll <= TOTAL_NUM &&
+        time < MAX_DAY * SAMPLE_PER_DAY
+      ) {
+        // 潜伏期有症状感染者
+        var currentPatientStage1 = 0
+        for (var index = 0; index < INCUBATION_DAY * SAMPLE_PER_DAY; index++) {
+          currentPatientStage1 += patient[index] || 0
+        }
+
+        // 有症状未隔离传染者
+        var currentPatientStage2NonIsolated = 0
+        for (
+          var index = INCUBATION_DAY * SAMPLE_PER_DAY;
+          index < INFECTION_TIME;
+          index++
+        ) {
+          currentPatientStage2NonIsolated += patient[index] || 0
+        }
+
+        // 无症状感染者
+        var currentInfectNoPatient = 0
+        for (var index = 0; index < INFECTION_TIME; index++) {
+          currentInfectNoPatient += infectNoPatient[index] || 0
+        }
+
+        var isolatedPatient = 0
+        for (
+          var index = 0;
+          index < SAMPLE_PER_DAY * (SICK_DAY - ISOLATED_DAY - 1);
+          index++
+        ) {
+          isolatedPatient += isolatedPatient[index] || 0
+        }
+
+        // 当前住院人数
+        var currentSeriousPatient = 0
+        for (var index = 0; index < SERIOUS_DAY * SAMPLE_PER_DAY; index++) {
+          currentSeriousPatient += seriousPatient[index] || 0
+        }
+
+        // 对传染免疫人数比例
+        var immuneRate =
+          (immune - isolatedPatient - currentSeriousPatient) /
+          (TOTAL_NUM - isolatedPatient - currentSeriousPatient)
+
+        var patientNumber =
+          (currentInfectNoPatient + currentPatientStage1) *
+          (R / INFECTION_TIME) *
+          ADJUST_NON_SICK_INFECT_RATE
+        patientNumber += (currentPatientStage2NonIsolated * R) / INFECTION_TIME
+        if (previousPatientNumber > LOCK_START_NUMBER) {
+          currentLockDay = LOCK_DAY
+        }
+        var isLocking = false
+        if (currentLockDay > 0) {
+          isLocking = true
+        }
+        patientNumber =
+          patientNumber * (1 - immuneRate) * (isLocking ? LOCK_EFFECT : 1)
+        patientNumber = Math.min(patientNumber, TOTAL_NUM - totalIll)
+        var newInfectNoPatient = patientNumber * NON_SICK_RATE
+        var newPatientNumber = patientNumber * (1 - NON_SICK_RATE)
+        patient.splice(0, 0, newPatientNumber)
+        infectNoPatient.splice(0, 0, newInfectNoPatient)
+
+        // 被感染也等于免疫
+        immune += patientNumber
+        totalIll += patientNumber
+        totalSickPatient += newPatientNumber
+        // 发现症状开始自我隔离
+        const findSickPatient =
+          patient[INCUBATION_DAY * SAMPLE_PER_DAY + SICK_FOUND_TIME]
+        const newSeriousPatient = findSickPatient * SERIOUS_RATE
+        homePatient.splice(
+          0,
+          0,
+          findSickPatient * (1 - SERIOUS_RATE) * ISOLATED_RATE,
+        )
+
+        // 有症状感染者开始隔离或者住院或者治愈
+        patient[INCUBATION_DAY * SAMPLE_PER_DAY + SICK_FOUND_TIME] -=
+          findSickPatient * (1 - SERIOUS_RATE) * ISOLATED_RATE
+        delete patient[INFECTION_TIME]
+        // 无症状感染者自愈
+        delete infectNoPatient[INFECTION_TIME]
+
+        // 病床按采样数 * 住院天数分组, 循环组数; 这里是当前出院的那一组
+        const serIndex = time % SER_PER
+
+        // 出院人数
+        var seriousCured = 0
+        if (time >= SER_PER) {
+          seriousCured = seriousPatient[(time - SER_PER) % SER_PER] || 0
+        }
+
+        seriousPatient[serIndex] = newSeriousPatient
+        currentTotalSeriousPatientNumber += newSeriousPatient || 0
+        currentTotalSeriousPatientNumber -= seriousCured
+        totalSeriousPatientNumber += newSeriousPatient || 0
+        previousPatientNumber = newPatientNumber
+        dataMatrix[0][time] = patientNumber
+        dataMatrix[1][time] = totalIll
+        dataMatrix[2][time] = currentTotalSeriousPatientNumber
+        dataMatrix[3][time] = totalSeriousPatientNumber
+        dataMatrix[4][time] = newPatientNumber
+        dataMatrix[5][time] = totalSickPatient
+        // 当感染人数为0 并且 出院人数为0 退出模拟, 也就是模拟了整个周期
+        if (patientNumber < 0.001 && seriousCured < 0.001) {
+          break
+        }
+
+        time++
+        currentLockDay--
+      }
+      var newDataMatrix = []
+      for (var index = 0; index < MATRIX_NUMBER * 2; index++) {
+        newDataMatrix.push([])
+      }
+
+      // 对采样点数据按天汇总
+      // 记录图表的横坐标(天数)
+      var timeTitle = []
+      for (var index = 0; index < MATRIX_NUMBER * 2; index++) {
+        for (var index2 = 0; index2 < dataMatrix[index].length; index2++) {
+          var newIndex = Math.floor(index2 / SAMPLE_PER_DAY)
+          timeTitle[newIndex] = `${newIndex + 1}`
+          if (index % 2 != 1) {
+            newDataMatrix[index][newIndex] =
+              dataMatrix[index][index2] + (newDataMatrix[index][newIndex] || 0)
+          } else {
+            newDataMatrix[index][newIndex] = dataMatrix[index][index2]
+          }
+        }
+      }
+      for (var index = 0; index < MATRIX_NUMBER * 2; index++) {
+        for (var index2 = 0; index2 < newDataMatrix[index].length; index2++) {
+          newDataMatrix[index][index2] = Math.round(
+            newDataMatrix[index][index2] || 0,
+          )
+        }
+      }
+
+      // 基于准备好的dom，初始化echarts实例
+      var myChart = echarts.init(document.getElementById('main'))
+
+      // 指定图表的配置项和数据
+      var option = {
+        title: {
+          text: '病毒演化模拟',
+        },
+        tooltip: {},
+        legend: {
+          data: [
+            '当天感染人数',
+            '感染总人数',
+            '住院人数',
+            '总住院人数',
+            '有症状感染者',
+            '总有症状感染者',
+          ],
+        },
+        xAxis: {
+          data: timeTitle,
+        },
+        yAxis: {},
+        series: [
+          {
+            name: '当天感染人数',
+            type: 'line',
+            data: newDataMatrix[0],
+          },
+          {
+            name: '感染总人数',
+            type: 'line',
+            data: newDataMatrix[1],
+          },
+          {
+            name: '住院人数',
+            type: 'line',
+            data: newDataMatrix[2],
+          },
+          {
+            name: '总住院人数',
+            type: 'line',
+            data: newDataMatrix[3],
+          },
+          {
+            name: '有症状感染者',
+            type: 'line',
+            data: newDataMatrix[4],
+          },
+          {
+            name: '总有症状感染者',
+            type: 'line',
+            data: newDataMatrix[5],
+          },
+        ],
+      }
+
+      // 使用刚指定的配置项和数据显示图表。
+      myChart.setOption(option)
+    </script>
+  </body>
+</html>

@@ -145,7 +145,7 @@
           index < SAMPLE_PER_DAY * (SICK_DAY - ISOLATED_DAY - 1);
           index++
         ) {
-          isolatedPatient += isolatedPatient[index] || 0
+          isolatedPatient += homePatient[index] || 0
         }
 
         // 当前住院人数
@@ -164,6 +164,8 @@
           (R / INFECTION_TIME) *
           ADJUST_NON_SICK_INFECT_RATE
         patientNumber += (currentPatientStage2NonIsolated * R) / INFECTION_TIME
+
+        // 开始全城封锁, 全城封锁后无法感染新患者
         if (previousPatientNumber > LOCK_START_NUMBER) {
           currentLockDay = LOCK_DAY
         }
@@ -171,11 +173,14 @@
         if (currentLockDay > 0) {
           isLocking = true
         }
+
         patientNumber =
           patientNumber * (1 - immuneRate) * (isLocking ? LOCK_EFFECT : 1)
         patientNumber = Math.min(patientNumber, TOTAL_NUM - totalIll)
         var newInfectNoPatient = patientNumber * NON_SICK_RATE
         var newPatientNumber = patientNumber * (1 - NON_SICK_RATE)
+
+        // 患者插入到第一代, 其它代往后+1
         patient.splice(0, 0, newPatientNumber)
         infectNoPatient.splice(0, 0, newInfectNoPatient)
 
@@ -183,9 +188,11 @@
         immune += patientNumber
         totalIll += patientNumber
         totalSickPatient += newPatientNumber
+
         // 发现症状开始自我隔离
         const findSickPatient =
           patient[INCUBATION_DAY * SAMPLE_PER_DAY + SICK_FOUND_TIME]
+
         const newSeriousPatient = findSickPatient * SERIOUS_RATE
         homePatient.splice(
           0,
@@ -228,6 +235,7 @@
         time++
         currentLockDay--
       }
+
       var newDataMatrix = []
       for (var index = 0; index < MATRIX_NUMBER * 2; index++) {
         newDataMatrix.push([])
